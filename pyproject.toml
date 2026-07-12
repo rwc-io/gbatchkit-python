@@ -17,11 +17,13 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Development Status :: 2 - Pre-Alpha",
 ]
 keywords = ["batch", "cloud", "google", "platform", "gcp"]
 dynamic = ["dependencies"]
-requires-python = ">=3.9, <=3.12"
+requires-python = ">=3.9, <=3.14"
 
 [tool.setuptools]
 # Let auto-discovery do its thing with src-layout.
