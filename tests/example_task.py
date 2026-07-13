@@ -25,8 +25,11 @@ def main():
     typed_args = get_task_arguments(task_args_cls=TypedArgs)
     print("Typed args:", typed_args)
 
-    parsed_args = get_task_arguments(task_args_cls=TypedArgs, args=["--a_str", "foo", "--an_int", "42"])
+    parsed_args = get_task_arguments(
+        task_args_cls=TypedArgs, args=["--a_str", "foo", "--an_int", "42"]
+    )
     print("Parsed args:", parsed_args)
+
 
 if __name__ == "__main__":
     main()
