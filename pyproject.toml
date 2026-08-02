@@ -23,7 +23,7 @@ classifiers = [
 ]
 keywords = ["batch", "cloud", "google", "platform", "gcp"]
 dynamic = ["dependencies"]
-requires-python = ">=3.9, <=3.14"
+requires-python = ">=3.9, <3.15"
 
 [tool.setuptools]
 # Let auto-discovery do its thing with src-layout.
