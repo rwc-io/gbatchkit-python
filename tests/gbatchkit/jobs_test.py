@@ -196,7 +196,7 @@ def test_create_standard_job():
                 commands=["arg1-2", "arg2-2"],
             ),
         ],
-        tmp_dir="/tmp-workspace",
+        tmp_dir="/mnt/disks/tmp-workspace",
         tmp_dir_size_gb=321,
         network_interface=NetworkInterfaceConfig(
             network="projects/my-project/global/networks/my-network",
@@ -221,7 +221,7 @@ def test_create_standard_job():
                         }
                     ],
                     "environment": {
-                        "variables": {"TMPDIR": "/tmp-workspace"},
+                        "variables": {"TMPDIR": "/mnt/disks/tmp-workspace"},
                     },
                     "runnables": [
                         {
@@ -242,7 +242,7 @@ def test_create_standard_job():
                     "volumes": [
                         {
                             "deviceName": "job-workspace",
-                            "mountPath": "/tmp-workspace",
+                            "mountPath": "/mnt/disks/tmp-workspace",
                         }
                     ],
                 },
@@ -348,3 +348,63 @@ def test_add_dependency():
             }
         }
     ]
+
+
+import pytest
+from gbatchkit.jobs import add_tmp_dir
+
+def test_add_tmp_dir_validation_success():
+    # Valid single name inside /mnt/disks
+    job = {
+        "allocationPolicy": {
+            "instances": [
+                {
+                    "policy": {}
+                }
+            ]
+        },
+        "taskGroups": [
+            {
+                "taskSpec": {}
+            }
+        ]
+    }
+    # No error should be raised for valid inputs
+    add_tmp_dir(job, "/mnt/disks/workspace", 10)
+    assert job["taskGroups"][0]["taskSpec"]["volumes"][0]["mountPath"] == "/mnt/disks/workspace"
+
+    # With a trailing slash (which normalizes to /mnt/disks/workspace)
+    add_tmp_dir(job, "/mnt/disks/workspace/", 10)
+
+
+@pytest.mark.parametrize(
+    "invalid_tmp_dir",
+    [
+        "/mnt/disks",                    # too short / empty name
+        "/mnt/disks/",                   # too short / empty name after normalization
+        "/mnt/disks/workspace/sub",      # multiple path elements
+        "/mnt/disks/workspace/sub/",     # multiple path elements
+        "/other/mnt/disks/workspace",    # outside /mnt/disks
+        "mnt/disks/workspace",           # relative path
+        "/mnt/disks/..",                 # resolves to /mnt, which is outside /mnt/disks
+        "/mnt/disks/workspace/..",       # resolves to /mnt/disks, which is too short
+        "/mnt/disks/workspace/../..",    # resolves to /mnt, which is outside
+    ]
+)
+def test_add_tmp_dir_validation_failure(invalid_tmp_dir):
+    job = {
+        "allocationPolicy": {
+            "instances": [
+                {
+                    "policy": {}
+                }
+            ]
+        },
+        "taskGroups": [
+            {
+                "taskSpec": {}
+            }
+        ]
+    }
+    with pytest.raises(ValueError, match="tmp_dir must be located in /mnt/disks/ and consist of a single name"):
+        add_tmp_dir(job, invalid_tmp_dir, 10)

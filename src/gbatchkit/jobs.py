@@ -252,6 +252,9 @@ def apply_cloud_log_policy(job: dict) -> None:
     }
 
 
+import posixpath
+from pathlib import PurePosixPath
+
 def add_tmp_dir(
     job: dict,
     tmp_dir: str,
@@ -260,6 +263,16 @@ def add_tmp_dir(
     """
     Add a temporary directory to the job definition.
     """
+    # Validation for attached disks being mounted as volumes located in /mnt/disks/
+    # Raises ValueError if tmp_dir is outside /mnt/disks or is not a single name (no subdirectories).
+    normalized_path = posixpath.normpath(tmp_dir)
+    parts = PurePosixPath(normalized_path).parts
+
+    if len(parts) != 4 or parts[0] != "/" or parts[1] != "mnt" or parts[2] != "disks":
+        raise ValueError(
+            "tmp_dir must be located in /mnt/disks/ and consist of a single name (e.g., /mnt/disks/workspace)."
+        )
+
     volume_name = "job-workspace"
     add_attached_disk(job, volume_name, tmp_dir_size_gb)
     add_job_storage_volume(job, tmp_dir, volume_name)
