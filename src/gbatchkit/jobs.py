@@ -1,7 +1,7 @@
 import json
 import subprocess
 import tempfile
-from typing import List, TypeVar, Union
+from typing import List, Optional, TypeVar, Union
 
 import math
 import smart_open
@@ -17,7 +17,9 @@ from gbatchkit.types import (
 TaskArgsType = TypeVar("TaskArgsType")
 
 
-def submit_job(job: dict, job_id: str, region: str) -> None:
+def submit_job(
+    job: dict, job_id: str, region: str, project: Optional[str] = None
+) -> None:
     """
     Submit a job to the Batch service.
     """
@@ -45,6 +47,9 @@ def submit_job(job: dict, job_id: str, region: str) -> None:
             "--config",
             job_json_file.name,
         ]
+        if project:
+            cmd.extend(["--project", project])
+
         result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
         if result.returncode != 0:
