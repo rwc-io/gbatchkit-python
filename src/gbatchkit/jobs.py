@@ -36,17 +36,21 @@ def submit_job(
             job_json_str = json.dumps(job)
             f.write(job_json_str)
 
-        cmd = [
-            "gcloud",
-            "batch",
-            "jobs",
-            "submit",
-            job_id,
-            "--location",
-            region,
-            "--config",
-            job_json_file.name,
-        ]
+        cmd = ["gcloud"]
+        if job.get("dependencies"):
+            cmd.append("alpha")
+        cmd.extend(
+            [
+                "batch",
+                "jobs",
+                "submit",
+                job_id,
+                "--location",
+                region,
+                "--config",
+                job_json_file.name,
+            ]
+        )
         if project:
             cmd.extend(["--project", project])
 

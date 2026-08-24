@@ -67,6 +67,58 @@ def test_submit_job(mock_smart_open, mock_subprocess_run):
 
 @patch("subprocess.run")
 @patch("smart_open.open", new_callable=mock_open)
+def test_submit_job_with_dependencies(mock_smart_open, mock_subprocess_run):
+    job = {
+        "taskGroups": [
+            {
+                "taskSpec": {
+                    "runnables": [
+                        {
+                            "container": {
+                                "image_uri": "test-image",
+                                "entrypoint": "test-command",
+                            }
+                        }
+                    ]
+                },
+                "taskCount": 1,
+            }
+        ],
+        "dependencies": [
+            {
+                "items": {
+                    "job-id-1": "SUCCEEDED",
+                }
+            }
+        ],
+    }
+
+    mock_subprocess_run.return_value = CompletedProcess([], returncode=0)
+    submit_job(job, job_id="test-job-id", region="us-central1", project="my-test-project")
+
+    # Verify that subprocess.run was called with "alpha"
+    mock_subprocess_run.assert_called_once_with(
+        [
+            "gcloud",
+            "alpha",
+            "batch",
+            "jobs",
+            "submit",
+            "test-job-id",
+            "--location",
+            "us-central1",
+            "--config",
+            ANY,
+            "--project",
+            "my-test-project",
+        ],
+        stdout=DEVNULL,
+        stderr=PIPE,
+    )
+
+
+@patch("subprocess.run")
+@patch("smart_open.open", new_callable=mock_open)
 def test_submit_job_with_project(mock_smart_open, mock_subprocess_run):
     job = {
         "taskGroups": [

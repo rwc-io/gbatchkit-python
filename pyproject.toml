@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gbatchkit"
-version = "1.0-alpha8"
+version = "1.0-alpha9"
 description = "Toolkit for running Google Cloud Batch jobs"
 readme = "README.md"
 authors = [{ name = "David Haley", email = "dchaley@gmail.com" }]
