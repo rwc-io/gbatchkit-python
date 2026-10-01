@@ -1,25 +1,35 @@
 import json
-from subprocess import CompletedProcess, DEVNULL, PIPE
-from unittest.mock import patch, mock_open, ANY
+from unittest.mock import MagicMock, patch
+
+import google.api_core.exceptions
+import google.auth
+from google.cloud import batch_v1, batch_v1alpha
+from google.protobuf.json_format import ParseError
+import pytest
 
 from gbatchkit.jobs import (
-    create_standard_job,
-    add_job_dependencies,
-    prepare_multitask_job,
     add_attached_disk,
+    add_job_dependencies,
+    add_tmp_dir,
+    create_standard_job,
+    prepare_multitask_job,
     submit_job,
 )
 from gbatchkit.types import (
-    ServiceAccountConfig,
-    NetworkInterfaceConfig,
     ComputeConfig,
     ContainerRunnable,
+    NetworkInterfaceConfig,
+    ServiceAccountConfig,
 )
 
 
-@patch("subprocess.run")
-@patch("smart_open.open", new_callable=mock_open)
-def test_submit_job(mock_smart_open, mock_subprocess_run):
+@patch("google.cloud.batch_v1.BatchServiceClient")
+def test_submit_job_v1(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    expected_created_job = MagicMock()
+    mock_client.create_job.return_value = expected_created_job
+
     job = {
         "taskGroups": [
             {
@@ -27,7 +37,7 @@ def test_submit_job(mock_smart_open, mock_subprocess_run):
                     "runnables": [
                         {
                             "container": {
-                                "image_uri": "test-image",
+                                "imageUri": "test-image",
                                 "entrypoint": "test-command",
                             }
                         }
@@ -38,36 +48,26 @@ def test_submit_job(mock_smart_open, mock_subprocess_run):
         ]
     }
 
-    # Call the function under test
-    mock_subprocess_run.return_value = CompletedProcess([], returncode=0)
-    submit_job(job, job_id="test-job-id", region="us-central1")
-
-    # Verify that the smart_open mock was used correctly
-    mock_smart_open.assert_called_once_with(ANY, "w")
-    handle = mock_smart_open()
-    handle.write.assert_called_once_with(json.dumps(job))
-
-    # Verify that subprocess.run was called correctly
-    mock_subprocess_run.assert_called_once_with(
-        [
-            "gcloud",
-            "batch",
-            "jobs",
-            "submit",
-            "test-job-id",
-            "--location",
-            "us-central1",
-            "--config",
-            ANY,
-        ],
-        stdout=DEVNULL,
-        stderr=PIPE,
+    result = submit_job(
+        job, job_id="test-job-id", region="us-central1", project="my-test-project"
     )
 
+    assert result == expected_created_job
+    mock_client.create_job.assert_called_once()
+    _, kwargs = mock_client.create_job.call_args
+    request = kwargs["request"]
+    assert request.parent == "projects/my-test-project/locations/us-central1"
+    assert request.job_id == "test-job-id"
+    assert isinstance(request.job, batch_v1.Job)
 
-@patch("subprocess.run")
-@patch("smart_open.open", new_callable=mock_open)
-def test_submit_job_with_dependencies(mock_smart_open, mock_subprocess_run):
+
+@patch("google.cloud.batch_v1alpha.BatchServiceClient")
+def test_submit_job_v1alpha_with_dependencies(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    expected_created_job = MagicMock()
+    mock_client.create_job.return_value = expected_created_job
+
     job = {
         "taskGroups": [
             {
@@ -75,7 +75,7 @@ def test_submit_job_with_dependencies(mock_smart_open, mock_subprocess_run):
                     "runnables": [
                         {
                             "container": {
-                                "image_uri": "test-image",
+                                "imageUri": "test-image",
                                 "entrypoint": "test-command",
                             }
                         }
@@ -93,33 +93,26 @@ def test_submit_job_with_dependencies(mock_smart_open, mock_subprocess_run):
         ],
     }
 
-    mock_subprocess_run.return_value = CompletedProcess([], returncode=0)
-    submit_job(job, job_id="test-job-id", region="us-central1", project="my-test-project")
-
-    # Verify that subprocess.run was called with "alpha"
-    mock_subprocess_run.assert_called_once_with(
-        [
-            "gcloud",
-            "alpha",
-            "batch",
-            "jobs",
-            "submit",
-            "test-job-id",
-            "--location",
-            "us-central1",
-            "--config",
-            ANY,
-            "--project",
-            "my-test-project",
-        ],
-        stdout=DEVNULL,
-        stderr=PIPE,
+    result = submit_job(
+        job, job_id="test-job-id", region="us-central1", project="my-test-project"
     )
 
+    assert result == expected_created_job
+    mock_client.create_job.assert_called_once()
+    _, kwargs = mock_client.create_job.call_args
+    request = kwargs["request"]
+    assert request.parent == "projects/my-test-project/locations/us-central1"
+    assert request.job_id == "test-job-id"
+    assert isinstance(request.job, batch_v1alpha.Job)
 
-@patch("subprocess.run")
-@patch("smart_open.open", new_callable=mock_open)
-def test_submit_job_with_project(mock_smart_open, mock_subprocess_run):
+
+@patch("google.cloud.batch_v1.BatchServiceClient")
+@patch("google.auth.default")
+def test_submit_job_project_fallback(mock_auth_default, mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_auth_default.return_value = (MagicMock(), "adc-project")
+
     job = {
         "taskGroups": [
             {
@@ -127,7 +120,7 @@ def test_submit_job_with_project(mock_smart_open, mock_subprocess_run):
                     "runnables": [
                         {
                             "container": {
-                                "image_uri": "test-image",
+                                "imageUri": "test-image",
                                 "entrypoint": "test-command",
                             }
                         }
@@ -138,31 +131,157 @@ def test_submit_job_with_project(mock_smart_open, mock_subprocess_run):
         ]
     }
 
-    mock_subprocess_run.return_value = CompletedProcess([], returncode=0)
-    submit_job(job, job_id="test-job-id", region="us-central1", project="my-test-project")
+    submit_job(job, job_id="test-job-id", region="us-central1")
 
-    # Verify that subprocess.run was called with --project
-    mock_subprocess_run.assert_called_once_with(
-        [
-            "gcloud",
-            "batch",
-            "jobs",
-            "submit",
-            "test-job-id",
-            "--location",
-            "us-central1",
-            "--config",
-            ANY,
-            "--project",
-            "my-test-project",
-        ],
-        stdout=DEVNULL,
-        stderr=PIPE,
+    mock_auth_default.assert_called_once()
+    _, kwargs = mock_client.create_job.call_args
+    request = kwargs["request"]
+    assert request.parent == "projects/adc-project/locations/us-central1"
+
+
+@patch("google.auth.default")
+def test_submit_job_missing_project_raises_error(mock_auth_default):
+    mock_auth_default.side_effect = google.auth.exceptions.DefaultCredentialsError()
+
+    job = {
+        "taskGroups": [
+            {
+                "taskSpec": {
+                    "runnables": [
+                        {
+                            "container": {
+                                "imageUri": "test-image",
+                                "entrypoint": "test-command",
+                            }
+                        }
+                    ]
+                },
+                "taskCount": 1,
+            }
+        ]
+    }
+
+    with pytest.raises(
+        ValueError,
+        match="Project is required and could not be determined from environment",
+    ):
+        submit_job(job, job_id="test-job-id", region="us-central1")
+
+
+def test_submit_job_validation():
+    valid_job = {
+        "taskGroups": [
+            {
+                "taskSpec": {
+                    "runnables": [
+                        {
+                            "container": {
+                                "imageUri": "test-image",
+                                "entrypoint": "test-command",
+                            }
+                        }
+                    ]
+                },
+                "taskCount": 1,
+            }
+        ]
+    }
+
+    # Empty job
+    with pytest.raises(ValueError, match="Job definition is empty"):
+        submit_job({}, job_id="test-job", region="us-central1", project="proj")
+
+    # Empty job_id
+    with pytest.raises(ValueError, match="Job ID must be 1-63 characters"):
+        submit_job(valid_job, job_id="", region="us-central1", project="proj")
+
+    # Job ID too long (64 chars)
+    with pytest.raises(ValueError, match="Job ID must be 1-63 characters"):
+        submit_job(valid_job, job_id="a" * 64, region="us-central1", project="proj")
+
+    # Empty region
+    with pytest.raises(ValueError, match="Region is required"):
+        submit_job(valid_job, job_id="test-job", region="", project="proj")
+
+
+@patch("google.cloud.batch_v1.BatchServiceClient")
+def test_submit_job_63_char_job_id_allowed(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+
+    valid_job = {
+        "taskGroups": [
+            {
+                "taskSpec": {
+                    "runnables": [
+                        {
+                            "container": {
+                                "imageUri": "test-image",
+                                "entrypoint": "test-command",
+                            }
+                        }
+                    ]
+                },
+                "taskCount": 1,
+            }
+        ]
+    }
+
+    submit_job(valid_job, job_id="a" * 63, region="us-central1", project="proj")
+    mock_client.create_job.assert_called_once()
+
+
+@patch("google.cloud.batch_v1.BatchServiceClient")
+def test_submit_job_strict_unknown_fields_error(mock_client_cls):
+    job_with_unknown_field = {
+        "invalidUnknownField": "value",
+        "taskGroups": [],
+    }
+
+    with pytest.raises(ParseError):
+        submit_job(
+            job_with_unknown_field,
+            job_id="test-job",
+            region="us-central1",
+            project="proj",
+        )
+
+
+@patch("google.cloud.batch_v1.BatchServiceClient")
+def test_submit_job_api_error_propagation(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client_cls.return_value = mock_client
+    mock_client.create_job.side_effect = google.api_core.exceptions.PermissionDenied(
+        "Permission denied"
     )
 
+    job = {
+        "taskGroups": [
+            {
+                "taskSpec": {
+                    "runnables": [
+                        {
+                            "container": {
+                                "imageUri": "test-image",
+                                "entrypoint": "test-command",
+                            }
+                        }
+                    ]
+                },
+                "taskCount": 1,
+            }
+        ]
+    }
 
-@patch("smart_open.open", new_callable=mock_open)
-def test_prepare_multitask_job_with_single_task_list(mock_smart_open):
+    with pytest.raises(google.api_core.exceptions.PermissionDenied):
+        submit_job(job, job_id="test-job-id", region="us-central1", project="proj")
+
+
+@patch("smart_open.open", new_callable=pytest.MonkeyPatch)
+def test_prepare_multitask_job_with_single_task_list(monkeypatch):
+    mock_open_func = MagicMock()
+    monkeypatch.setattr("smart_open.open", mock_open_func)
+
     job = {
         "taskGroups": [
             {
@@ -189,8 +308,8 @@ def test_prepare_multitask_job_with_single_task_list(mock_smart_open):
 
     prepare_multitask_job(job=job, tasks=tasks, working_directory="/test-dir")
 
-    mock_smart_open.assert_called_once_with("/test-dir/tasks.json", "w")
-    handle = mock_smart_open()
+    mock_open_func.assert_called_once_with("/test-dir/tasks.json", "w")
+    handle = mock_open_func.return_value.__enter__.return_value
     handle.write.assert_called_once_with(
         '[{"task_id": 1, "param": "value1"}, {"task_id": 2, "param": "value2"}, {"task_id": 3, "param": "value3"}]'
     )
@@ -202,8 +321,22 @@ def test_prepare_multitask_job_with_single_task_list(mock_smart_open):
     )
 
 
-@patch("smart_open.open", new_callable=mock_open)
-def test_prepare_multitask_job_with_tasks_per_runnable(mock_smart_open):
+def test_prepare_multitask_job_with_tasks_per_runnable():
+    mock_files = {}
+
+    def fake_smart_open(path, mode="r"):
+        class FakeFile:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                pass
+
+            def write(self, content):
+                mock_files[path] = content
+
+        return FakeFile()
+
     job = {
         "taskGroups": [
             {
@@ -233,28 +366,17 @@ def test_prepare_multitask_job_with_tasks_per_runnable(mock_smart_open):
         [{"task2_id": "runnable2_task1"}, {"task2_id": "runnable2_task2"}],
     ]
 
-    prepare_multitask_job(
-        job=job, runnable_tasks=runnable_tasks, working_directory="/test-dir"
+    with patch("smart_open.open", side_effect=fake_smart_open):
+        prepare_multitask_job(
+            job=job, runnable_tasks=runnable_tasks, working_directory="/test-dir"
+        )
+
+    assert mock_files["/test-dir/runnable_0_tasks.json"] == (
+        '[{"task1_id": "runnable1_task1"}, {"task1_id": "runnable1_task2"}]'
     )
-
-    # Verify files and the associated calls
-    expected_calls = [
-        (
-            ("/test-dir/runnable_0_tasks.json", "w"),
-            '[{"task1_id": "runnable1_task1"}, {"task1_id": "runnable1_task2"}]',
-        ),
-        (
-            ("/test-dir/runnable_1_tasks.json", "w"),
-            '[{"task2_id": "runnable2_task1"}, {"task2_id": "runnable2_task2"}]',
-        ),
-    ]
-
-    assert mock_smart_open.call_count == 2
-    for call, expected in zip(mock_smart_open.call_args_list, expected_calls):
-        mock_call, expected_content = expected
-        assert call[0] == mock_call
-        handle = mock_smart_open()
-        handle.write.assert_any_call(expected_content)
+    assert mock_files["/test-dir/runnable_1_tasks.json"] == (
+        '[{"task2_id": "runnable2_task1"}, {"task2_id": "runnable2_task2"}]'
+    )
 
     # Verify environment variables
     assert (
@@ -446,61 +568,41 @@ def test_add_dependency():
     ]
 
 
-import pytest
-from gbatchkit.jobs import add_tmp_dir
-
 def test_add_tmp_dir_validation_success():
-    # Valid single name inside /mnt/disks
     job = {
-        "allocationPolicy": {
-            "instances": [
-                {
-                    "policy": {}
-                }
-            ]
-        },
-        "taskGroups": [
-            {
-                "taskSpec": {}
-            }
-        ]
+        "allocationPolicy": {"instances": [{"policy": {}}]},
+        "taskGroups": [{"taskSpec": {}}],
     }
-    # No error should be raised for valid inputs
     add_tmp_dir(job, "/mnt/disks/workspace", 10)
-    assert job["taskGroups"][0]["taskSpec"]["volumes"][0]["mountPath"] == "/mnt/disks/workspace"
+    assert (
+        job["taskGroups"][0]["taskSpec"]["volumes"][0]["mountPath"]
+        == "/mnt/disks/workspace"
+    )
 
-    # With a trailing slash (which normalizes to /mnt/disks/workspace)
     add_tmp_dir(job, "/mnt/disks/workspace/", 10)
 
 
 @pytest.mark.parametrize(
     "invalid_tmp_dir",
     [
-        "/mnt/disks",                    # too short / empty name
-        "/mnt/disks/",                   # too short / empty name after normalization
-        "/mnt/disks/workspace/sub",      # multiple path elements
-        "/mnt/disks/workspace/sub/",     # multiple path elements
-        "/other/mnt/disks/workspace",    # outside /mnt/disks
-        "mnt/disks/workspace",           # relative path
-        "/mnt/disks/..",                 # resolves to /mnt, which is outside /mnt/disks
-        "/mnt/disks/workspace/..",       # resolves to /mnt/disks, which is too short
-        "/mnt/disks/workspace/../..",    # resolves to /mnt, which is outside
-    ]
+        "/mnt/disks",
+        "/mnt/disks/",
+        "/mnt/disks/workspace/sub",
+        "/mnt/disks/workspace/sub/",
+        "/other/mnt/disks/workspace",
+        "mnt/disks/workspace",
+        "/mnt/disks/..",
+        "/mnt/disks/workspace/..",
+        "/mnt/disks/workspace/../..",
+    ],
 )
 def test_add_tmp_dir_validation_failure(invalid_tmp_dir):
     job = {
-        "allocationPolicy": {
-            "instances": [
-                {
-                    "policy": {}
-                }
-            ]
-        },
-        "taskGroups": [
-            {
-                "taskSpec": {}
-            }
-        ]
+        "allocationPolicy": {"instances": [{"policy": {}}]},
+        "taskGroups": [{"taskSpec": {}}],
     }
-    with pytest.raises(ValueError, match="tmp_dir must be located in /mnt/disks/ and consist of a single name"):
+    with pytest.raises(
+        ValueError,
+        match="tmp_dir must be located in /mnt/disks/ and consist of a single name",
+    ):
         add_tmp_dir(job, invalid_tmp_dir, 10)
