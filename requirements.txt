@@ -1,2 +1,3 @@
+google-cloud-batch
 pydantic
 smart_open[gcs]

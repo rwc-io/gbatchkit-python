@@ -1,9 +1,11 @@
 import json
-import subprocess
-import tempfile
+import math
+import posixpath
+from pathlib import PurePosixPath
 from typing import List, Optional, TypeVar, Union
 
-import math
+import google.auth
+from google.cloud import batch_v1, batch_v1alpha
 import smart_open
 
 from gbatchkit.types import (
@@ -19,45 +21,37 @@ TaskArgsType = TypeVar("TaskArgsType")
 
 def submit_job(
     job: dict, job_id: str, region: str, project: Optional[str] = None
-) -> None:
+) -> Union[batch_v1.Job, batch_v1alpha.Job]:
     """
     Submit a job to the Batch service.
     """
     if not job:
         raise ValueError("Job definition is empty")
-    if not job_id or len(job_id) > 64:
-        raise ValueError("Job ID must be 1-64 characters")
+    if not job_id or len(job_id) > 63:
+        raise ValueError("Job ID must be 1-63 characters")
     if not region:
         raise ValueError("Region is required")
 
-    with tempfile.NamedTemporaryFile() as job_json_file:
-        with smart_open.open(job_json_file.name, "w") as f:
-            # separated for ease of testing
-            job_json_str = json.dumps(job)
-            f.write(job_json_str)
+    if not project:
+        try:
+            _, project = google.auth.default()
+        except Exception:
+            project = None
 
-        cmd = ["gcloud"]
-        if job.get("dependencies"):
-            cmd.append("alpha")
-        cmd.extend(
-            [
-                "batch",
-                "jobs",
-                "submit",
-                job_id,
-                "--location",
-                region,
-                "--config",
-                job_json_file.name,
-            ]
+    if not project:
+        raise ValueError(
+            "Project is required and could not be determined from environment"
         )
-        if project:
-            cmd.extend(["--project", project])
 
-        result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    api = batch_v1alpha if job.get("dependencies") else batch_v1
 
-        if result.returncode != 0:
-            raise RuntimeError(f"Failed to submit job: {result.stderr.decode('utf-8')}")
+    client = api.BatchServiceClient()
+    request = api.CreateJobRequest(
+        parent=f"projects/{project}/locations/{region}",
+        job_id=job_id,
+        job=api.Job.from_json(json.dumps(job)),
+    )
+    return client.create_job(request=request)
 
 
 def prepare_multitask_job(
@@ -260,9 +254,6 @@ def apply_cloud_log_policy(job: dict) -> None:
         "destination": "CLOUD_LOGGING",
     }
 
-
-import posixpath
-from pathlib import PurePosixPath
 
 def add_tmp_dir(
     job: dict,
