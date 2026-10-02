@@ -64,4 +64,39 @@ Key features:
     submit_job(job, "my_unique_job_id", region)
     ```
 
-    
+## Authentication & In-Memory Credentials
+
+By default, functions in `gbatchkit` fall back to Application Default Credentials (ADC).
+
+For environments where credentials are held in memory (such as web servers handling per-session credentials), you can pass an explicit `credentials` argument to `submit_job`, `prepare_multitask_job`, `write_tasks`, or `get_task_arguments`.
+
+The `credentials` parameter accepts either a `google.auth.credentials.Credentials` object or a raw parsed JSON dictionary (e.g. from a service account key file).
+
+```python
+# In-memory service account credentials JSON dict
+credentials_json = {
+    "type": "service_account",
+    "project_id": "my-project",
+    "private_key_id": "...",
+    "private_key": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n",
+    "client_email": "service-account@my-project.iam.gserviceaccount.com",
+    "client_id": "...",
+    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+    "token_uri": "https://oauth2.googleapis.com/token",
+}
+
+# The credential drives both GCP Batch job submission and GCS task-file I/O
+prepare_multitask_job(
+    job,
+    working_directory="gs://a-bucket/jobs",
+    tasks=task_arguments,
+    credentials=credentials_json,
+)
+
+submit_job(
+    job,
+    job_id="my_unique_job_id",
+    region=region,
+    credentials=credentials_json,
+)
+```

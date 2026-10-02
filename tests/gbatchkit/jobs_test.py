@@ -163,7 +163,7 @@ def test_submit_job_missing_project_raises_error(mock_auth_default):
 
     with pytest.raises(
         ValueError,
-        match="Project is required and could not be determined from environment",
+        match="Could not determine project",
     ):
         submit_job(job, job_id="test-job-id", region="us-central1")
 
@@ -606,3 +606,180 @@ def test_add_tmp_dir_validation_failure(invalid_tmp_dir):
         match="tmp_dir must be located in /mnt/disks/ and consist of a single name",
     ):
         add_tmp_dir(job, invalid_tmp_dir, 10)
+
+
+def make_sa_dict(project_id="test-sa-project"):
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pem = key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("utf-8")
+    return {
+        "type": "service_account",
+        "project_id": project_id,
+        "private_key_id": "key-id",
+        "private_key": pem,
+        "client_email": f"test-sa@{project_id}.iam.gserviceaccount.com",
+        "client_id": "123456789",
+        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+        "token_uri": "https://oauth2.googleapis.com/token",
+    }
+
+
+def test_resolve_credentials_from_dict():
+    from gbatchkit.jobs import BATCH_SCOPES, _resolve_credentials
+    import google.oauth2.service_account
+
+    sa_dict = make_sa_dict("sa-project-123")
+    creds, project = _resolve_credentials(credentials=sa_dict)
+
+    assert isinstance(creds, google.oauth2.service_account.Credentials)
+    assert creds.scopes == BATCH_SCOPES
+    assert project == "sa-project-123"
+
+
+def test_resolve_credentials_from_object():
+    from gbatchkit.jobs import BATCH_SCOPES, _resolve_credentials
+    import google.oauth2.service_account
+
+    sa_dict = make_sa_dict("obj-project-456")
+    creds_obj = google.oauth2.service_account.Credentials.from_service_account_info(
+        sa_dict, scopes=BATCH_SCOPES
+    )
+    creds, project = _resolve_credentials(credentials=creds_obj)
+
+    assert creds is creds_obj
+    assert project == "obj-project-456"
+
+
+def test_resolve_credentials_project_precedence():
+    from gbatchkit.jobs import _resolve_credentials
+
+    sa_dict = make_sa_dict("sa-project")
+
+    # 1. Explicit project takes precedence
+    _, project1 = _resolve_credentials(credentials=sa_dict, project="explicit-project")
+    assert project1 == "explicit-project"
+
+    # 2. Credential project used when explicit project is None
+    _, project2 = _resolve_credentials(credentials=sa_dict, project=None)
+    assert project2 == "sa-project"
+
+    # 3. Missing both raises ValueError
+    mock_creds_no_proj = MagicMock(spec=google.auth.credentials.Credentials)
+    del mock_creds_no_proj.project_id
+    del mock_creds_no_proj.quota_project_id
+    with pytest.raises(ValueError, match="Could not determine project"):
+        _resolve_credentials(credentials=mock_creds_no_proj, project=None)
+
+
+@patch("google.cloud.storage.Client")
+@patch("google.cloud.batch_v1.BatchServiceClient")
+@patch("smart_open.open")
+def test_credentials_dict_authenticates_submit_and_task_write(
+    mock_smart_open, mock_batch_client_cls, mock_storage_client_cls
+):
+    import google.oauth2.service_account
+
+    mock_batch_client = MagicMock()
+    mock_batch_client_cls.return_value = mock_batch_client
+    mock_storage_client = MagicMock()
+    mock_storage_client_cls.return_value = mock_storage_client
+
+    sa_dict = make_sa_dict("dual-auth-project")
+
+    job = {
+        "taskGroups": [
+            {
+                "taskSpec": {
+                    "runnables": [
+                        {
+                            "container": {
+                                "imageUri": "test-image",
+                                "entrypoint": "test-command",
+                            }
+                        }
+                    ]
+                },
+                "taskCount": 1,
+            }
+        ]
+    }
+
+    # Prepare multitask job with credentials dict
+    prepare_multitask_job(
+        job=job,
+        working_directory="gs://my-bucket/jobs",
+        tasks=[{"arg": "val"}],
+        credentials=sa_dict,
+    )
+
+    mock_storage_client_cls.assert_called_once()
+    _, storage_kwargs = mock_storage_client_cls.call_args
+    assert storage_kwargs["project"] == "dual-auth-project"
+    resolved_creds = storage_kwargs["credentials"]
+    assert isinstance(resolved_creds, google.oauth2.service_account.Credentials)
+
+    mock_smart_open.assert_called_once_with(
+        "gs://my-bucket/jobs/tasks.json",
+        "w",
+        transport_params={"client": mock_storage_client},
+    )
+
+    # Submit job with credentials dict
+    submit_job(job, job_id="test-job", region="us-central1", credentials=sa_dict)
+
+    mock_batch_client_cls.assert_called_once()
+    _, batch_kwargs = mock_batch_client_cls.call_args
+    assert batch_kwargs["credentials"].service_account_email == resolved_creds.service_account_email
+    assert batch_kwargs["credentials"].project_id == resolved_creds.project_id
+
+
+@patch("google.cloud.batch_v1.BatchServiceClient")
+def test_concurrent_calls_thread_safety(mock_batch_client_cls):
+    import concurrent.futures
+
+    sa_dict_a = make_sa_dict("project-a")
+    sa_dict_b = make_sa_dict("project-b")
+
+    job = {
+        "taskGroups": [
+            {
+                "taskSpec": {
+                    "runnables": [
+                        {
+                            "container": {
+                                "imageUri": "test-image",
+                                "entrypoint": "test-command",
+                            }
+                        }
+                    ]
+                },
+                "taskCount": 1,
+            }
+        ]
+    }
+
+    def worker_a():
+        submit_job(job, job_id="job-a", region="us-central1", credentials=sa_dict_a)
+
+    def worker_b():
+        submit_job(job, job_id="job-b", region="us-central1", credentials=sa_dict_b)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        f_a = executor.submit(worker_a)
+        f_b = executor.submit(worker_b)
+        f_a.result()
+        f_b.result()
+
+    creds_seen = [
+        call.kwargs["credentials"].service_account_email
+        for call in mock_batch_client_cls.call_args_list
+    ]
+    assert len(creds_seen) == 2
+    assert "test-sa@project-a.iam.gserviceaccount.com" in creds_seen
+    assert "test-sa@project-b.iam.gserviceaccount.com" in creds_seen

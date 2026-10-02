@@ -1,26 +1,69 @@
 import json
 import math
 import posixpath
+import warnings
 from pathlib import PurePosixPath
 from typing import List, Optional, TypeVar, Union
 
 import google.auth
-from google.cloud import batch_v1, batch_v1alpha
+from google.cloud import batch_v1, batch_v1alpha, storage
 import smart_open
 
 from gbatchkit.types import (
     ComputeConfig,
-    NetworkInterfaceConfig,
-    ServiceAccountConfig,
-    Runnable,
     ContainerRunnable,
+    NetworkInterfaceConfig,
+    Runnable,
+    ServiceAccountConfig,
 )
 
 TaskArgsType = TypeVar("TaskArgsType")
 
+BATCH_SCOPES = ["https://www.googleapis.com/auth/cloud-platform"]
+
+
+def _resolve_credentials(credentials=None, project=None):
+    """Returns (credentials, project).
+
+    `credentials` may be a Credentials object, a parsed credentials JSON dict,
+    or None for Application Default Credentials.
+    """
+    if credentials is None:
+        try:
+            creds, creds_project = google.auth.default(scopes=BATCH_SCOPES)
+        except Exception:
+            creds, creds_project = None, None
+    elif isinstance(credentials, dict):
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                category=DeprecationWarning,
+                message=".*load_credentials_from_dict.*",
+            )
+            creds, creds_project = google.auth.load_credentials_from_dict(
+                credentials, scopes=BATCH_SCOPES
+            )
+    else:
+        creds_project = getattr(credentials, "project_id", None) or getattr(
+            credentials, "quota_project_id", None
+        )
+        creds = credentials
+
+    resolved = project or creds_project
+    if not resolved:
+        raise ValueError(
+            "Could not determine project. Pass project= explicitly, or supply "
+            "credentials that carry one."
+        )
+    return creds, resolved
+
 
 def submit_job(
-    job: dict, job_id: str, region: str, project: Optional[str] = None
+    job: dict,
+    job_id: str,
+    region: str,
+    project: Optional[str] = None,
+    credentials: Optional[Union[google.auth.credentials.Credentials, dict]] = None,
 ) -> Union[batch_v1.Job, batch_v1alpha.Job]:
     """
     Submit a job to the Batch service.
@@ -32,22 +75,19 @@ def submit_job(
     if not region:
         raise ValueError("Region is required")
 
-    if not project:
-        try:
-            _, project = google.auth.default()
-        except Exception:
-            project = None
-
-    if not project:
-        raise ValueError(
-            "Project is required and could not be determined from environment"
-        )
+    creds, resolved_project = _resolve_credentials(
+        credentials=credentials, project=project
+    )
 
     api = batch_v1alpha if job.get("dependencies") else batch_v1
 
-    client = api.BatchServiceClient()
+    client_kwargs = {}
+    if creds is not None:
+        client_kwargs["credentials"] = creds
+
+    client = api.BatchServiceClient(**client_kwargs)
     request = api.CreateJobRequest(
-        parent=f"projects/{project}/locations/{region}",
+        parent=f"projects/{resolved_project}/locations/{region}",
         job_id=job_id,
         job=api.Job.from_json(json.dumps(job)),
     )
@@ -59,6 +99,8 @@ def prepare_multitask_job(
     working_directory: str,
     tasks: List[Union[dict, TaskArgsType]] = None,
     runnable_tasks: List[List[Union[dict, TaskArgsType]]] = None,
+    credentials: Optional[Union[google.auth.credentials.Credentials, dict]] = None,
+    project: Optional[str] = None,
 ):
     """
     Prepare a multitask job by assigning tasks, or per-runnable tasks to the job,
@@ -73,6 +115,8 @@ def prepare_multitask_job(
     :param runnable_tasks: A list of tasks per runnable. Must have a task
         list for each runnable. This is mutually exclusive with `tasks`.
     :type runnable_tasks: list[list[Union[dict, TaskArgsType]]], optional
+    :param credentials: Credentials object or parsed JSON dict for Google Auth.
+    :param str project: GCP project ID.
     :return: None
     :raises ValueError: If both `tasks` and `runnable_tasks` are specified, if the number
         of `runnable_tasks` does not match the number of runnables in the job, if the
@@ -105,23 +149,46 @@ def prepare_multitask_job(
             set_runnable_environment_variable(
                 runnable, "GBATCHKIT_ARGS_PATH", runnable_tasks_path
             )
-            write_tasks(tasks, runnable_tasks_path)
+            write_tasks(
+                tasks,
+                runnable_tasks_path,
+                credentials=credentials,
+                project=project,
+            )
     elif tasks:
         if len(tasks) != num_tasks:
             raise ValueError(f"Need {num_tasks} tasks, got {len(tasks)}")
 
         runnable_tasks_path = f"{working_directory}/tasks.json"
         set_job_environment_variable(job, "GBATCHKIT_ARGS_PATH", runnable_tasks_path)
-        write_tasks(tasks, runnable_tasks_path)
+        write_tasks(
+            tasks,
+            runnable_tasks_path,
+            credentials=credentials,
+            project=project,
+        )
     else:
         raise ValueError("Need to specify either tasks or runnable_tasks")
 
 
-def write_tasks(tasks: List[Union[dict, TaskArgsType]], tasks_path: str):
+def write_tasks(
+    tasks: List[Union[dict, TaskArgsType]],
+    tasks_path: str,
+    credentials: Optional[Union[google.auth.credentials.Credentials, dict]] = None,
+    project: Optional[str] = None,
+):
     """
     Write tasks to a JSON file.
     """
-    with smart_open.open(tasks_path, "w") as f:
+    open_kwargs = {}
+    if credentials is not None or project is not None:
+        creds, resolved_project = _resolve_credentials(
+            credentials=credentials, project=project
+        )
+        gcs_client = storage.Client(credentials=creds, project=resolved_project)
+        open_kwargs["transport_params"] = {"client": gcs_client}
+
+    with smart_open.open(tasks_path, "w", **open_kwargs) as f:
         # str then write separated for ease of testing :-/
         json_str = json.dumps(
             [

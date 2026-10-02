@@ -1,5 +1,6 @@
 import json
 import os
+from unittest.mock import MagicMock, patch
 
 import pytest
 from pydantic import BaseModel
@@ -73,3 +74,56 @@ def test_get_task_arguments_no_env_or_args():
         match="Need GBATCHKIT_ARGS_PATH env, or task_args_cls to read from args",
     ):
         get_task_arguments()
+
+
+@patch("google.cloud.storage.Client")
+@patch("smart_open.open")
+def test_get_batch_indexed_task_with_credentials(
+    mock_smart_open, mock_storage_client_cls, mock_task_index
+):
+    from unittest.mock import MagicMock
+    import google.oauth2.service_account
+    from gbatchkit.inputs import get_batch_indexed_task
+    from tests.gbatchkit.jobs_test import make_sa_dict
+
+    mock_storage_client = MagicMock()
+    mock_storage_client_cls.return_value = mock_storage_client
+
+    mock_file = MagicMock()
+    mock_file.__enter__.return_value = mock_file
+    mock_file.read.return_value = json.dumps([{"arg1": 11, "arg2": "a"}, {"arg1": 22, "arg2": "b"}])
+    mock_smart_open.return_value = mock_file
+
+    sa_dict = make_sa_dict("task-input-proj")
+
+    result = get_batch_indexed_task("gs://bucket/tasks.json", credentials=sa_dict)
+
+    assert result == {"arg1": 22, "arg2": "b"}
+    mock_storage_client_cls.assert_called_once()
+    _, storage_kwargs = mock_storage_client_cls.call_args
+    assert storage_kwargs["project"] == "task-input-proj"
+    assert isinstance(storage_kwargs["credentials"], google.oauth2.service_account.Credentials)
+
+    mock_smart_open.assert_called_once_with(
+        "gs://bucket/tasks.json",
+        "r",
+        transport_params={"client": mock_storage_client},
+    )
+
+
+@patch("smart_open.open")
+def test_get_batch_indexed_task_without_credentials_omits_transport_params(
+    mock_smart_open, mock_task_index
+):
+    from unittest.mock import MagicMock
+    from gbatchkit.inputs import get_batch_indexed_task
+
+    mock_file = MagicMock()
+    mock_file.__enter__.return_value = mock_file
+    mock_file.read.return_value = json.dumps([{"arg1": 11, "arg2": "a"}, {"arg1": 22, "arg2": "b"}])
+    mock_smart_open.return_value = mock_file
+
+    result = get_batch_indexed_task("gs://bucket/tasks.json")
+
+    assert result == {"arg1": 22, "arg2": "b"}
+    mock_smart_open.assert_called_once_with("gs://bucket/tasks.json", "r")
