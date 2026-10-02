@@ -21,10 +21,10 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
 
     - name: Download built distributions
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v7
       with:
         name: python-package-distributions
         path: dist/
@@ -33,7 +33,7 @@ jobs:
       uses: pypa/gh-action-pypi-publish@release/v1
 
     - name: Create and Publish GitHub Release
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@v3
       with:
         tag_name: "v${{ needs.build.outputs.version }}"
         name: "v${{ needs.build.outputs.version }}"
