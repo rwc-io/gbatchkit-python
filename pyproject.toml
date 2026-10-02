@@ -41,5 +41,4 @@ Homepage = "https://github.com/redwoodconsulting-io/gbatchkit-python"
 filterwarnings = [
     # Google code throws a deprecation warning ... make it go away
     "ignore:pkg_resources:DeprecationWarning:google.crc32c",
-    "ignore:The load_credentials_from_dict method is deprecated:DeprecationWarning",
 ]

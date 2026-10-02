@@ -1,6 +1,7 @@
 import json
 import math
 import posixpath
+import warnings
 from pathlib import PurePosixPath
 from typing import List, Optional, TypeVar, Union
 
@@ -33,9 +34,15 @@ def _resolve_credentials(credentials=None, project=None):
         except Exception:
             creds, creds_project = None, None
     elif isinstance(credentials, dict):
-        creds, creds_project = google.auth.load_credentials_from_dict(
-            credentials, scopes=BATCH_SCOPES
-        )
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                category=DeprecationWarning,
+                message=".*load_credentials_from_dict.*",
+            )
+            creds, creds_project = google.auth.load_credentials_from_dict(
+                credentials, scopes=BATCH_SCOPES
+            )
     else:
         creds_project = getattr(credentials, "project_id", None) or getattr(
             credentials, "quota_project_id", None
