@@ -2,6 +2,7 @@ import json
 import math
 import posixpath
 import warnings
+from collections.abc import Mapping
 from pathlib import PurePosixPath
 from typing import List, Optional, TypeVar, Union
 
@@ -12,6 +13,8 @@ import smart_open
 from gbatchkit.types import (
     ComputeConfig,
     ContainerRunnable,
+    DependencyType,
+    JobDependencies,
     NetworkInterfaceConfig,
     Runnable,
     ServiceAccountConfig,
@@ -210,7 +213,7 @@ def create_standard_job(
     tmp_dir_size_gb: int = None,
     network_interface: NetworkInterfaceConfig = None,
     service_account: ServiceAccountConfig = None,
-    depends_on_job_ids: List[str] = None,
+    depends_on_job_ids: Optional[JobDependencies] = None,
 ) -> dict:
     job = create_job_base(
         task_count, task_count_per_node=task_count_per_node, parallelism=parallelism
@@ -423,14 +426,25 @@ def add_service_account(job: dict, service_account: ServiceAccountConfig):
     job["allocationPolicy"]["serviceAccount"] = service_account.model_dump()
 
 
-def add_job_dependencies(job: dict, job_ids: list[str]):
+def add_job_dependencies(
+    job: dict,
+    job_ids: JobDependencies,
+    type: Union[DependencyType, str] = DependencyType.SUCCEEDED,
+) -> None:
+    """Add job dependencies to the job definition.
+
+    ``job_ids`` is either a list of job IDs, each depending on ``type``
+    (succeeded, by default), or a map of job ID to its own dependency type.
     """
-    Add job dependencies to the job definition.
-    """
-    job_ids = list(filter(None, job_ids))
-    if not job_ids:
+    if isinstance(job_ids, Mapping):
+        items = dict(job_ids)
+    else:
+        items = dict.fromkeys(job_ids, type)
+
+    # DependencyType(...) checks plain strings too, so "FAILD" fails here, at build time.
+    items = {job_id: DependencyType(t).value for job_id, t in items.items() if job_id}
+    if not items:
         return
 
     dependencies = job.setdefault("dependencies", [{"items": {}}])[0]
-    for job_id in job_ids:
-        dependencies["items"][job_id] = "SUCCEEDED"
+    dependencies["items"].update(items)

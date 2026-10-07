@@ -18,6 +18,7 @@ from gbatchkit.jobs import (
 from gbatchkit.types import (
     ComputeConfig,
     ContainerRunnable,
+    DependencyType,
     NetworkInterfaceConfig,
     ServiceAccountConfig,
 )
@@ -553,16 +554,80 @@ def test_add_dependency():
     job = {}
 
     add_job_dependencies(job, [])
-
     assert job == {}
 
     add_job_dependencies(job, ["job-id-1", "job-id-2"])
-
     assert job["dependencies"] == [
         {
             "items": {
                 "job-id-1": "SUCCEEDED",
                 "job-id-2": "SUCCEEDED",
+            }
+        }
+    ]
+
+
+def test_add_dependency_with_custom_type_and_mapping():
+    job = {}
+
+    # List with custom type parameter (string and enum)
+    add_job_dependencies(job, ["job-failed-1"], type="FAILED")
+    assert job["dependencies"][0]["items"]["job-failed-1"] == "FAILED"
+
+    add_job_dependencies(job, ["job-finished-1"], type=DependencyType.FINISHED)
+    assert job["dependencies"][0]["items"]["job-finished-1"] == "FINISHED"
+
+    # Mapping of job_id -> dependency condition
+    job2 = {}
+    add_job_dependencies(
+        job2,
+        {
+            "job-a": "SUCCEEDED",
+            "job-b": DependencyType.FAILED,
+            "job-c": "FINISHED",
+            "": "SUCCEEDED",  # empty string job ID should be filtered out
+        },
+    )
+    assert job2["dependencies"] == [
+        {
+            "items": {
+                "job-a": "SUCCEEDED",
+                "job-b": "FAILED",
+                "job-c": "FINISHED",
+            }
+        }
+    ]
+
+
+def test_add_dependency_invalid_type_raises():
+    job = {}
+    with pytest.raises(ValueError):
+        add_job_dependencies(job, ["job-1"], type="FAILD")
+
+    with pytest.raises(ValueError):
+        add_job_dependencies(job, {"job-1": "UNKNOWN_CONDITION"})
+
+
+def test_create_standard_job_with_dependency_mapping():
+    job = create_standard_job(
+        region="us-central1",
+        compute_config=ComputeConfig(machine_type="n1-standard-1"),
+        task_count=1,
+        runnables=[
+            ContainerRunnable(
+                image_uri="gcr.io/my-project/my-image",
+                entrypoint="command",
+                commands=[],
+            )
+        ],
+        depends_on_job_ids={"align": "SUCCEEDED", "qc": DependencyType.FINISHED},
+    )
+
+    assert job["dependencies"] == [
+        {
+            "items": {
+                "align": "SUCCEEDED",
+                "qc": "FINISHED",
             }
         }
     ]

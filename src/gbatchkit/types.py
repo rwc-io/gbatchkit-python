@@ -1,4 +1,17 @@
+from enum import Enum
+from typing import Mapping, Sequence, Union
+
 from pydantic import BaseModel, Field
+
+
+class DependencyType(str, Enum):
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+    FINISHED = "FINISHED"
+
+
+# A list of job IDs (each must succeed), or a map of job ID -> condition.
+JobDependencies = Union[Sequence[str], Mapping[str, Union[DependencyType, str]]]
 
 
 class ComputeConfig(BaseModel):
